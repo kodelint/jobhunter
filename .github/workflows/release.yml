@@ -1,0 +1,96 @@
+name: Release
+
+# Build a universal (Apple Silicon + Intel) DMG and publish a GitHub Release.
+# Trigger by pushing a semver tag (vX.Y.Z), or run manually from the Actions tab.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'    # pre-releases, e.g. v1.2.0-beta.1
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag to build and release (e.g. v1.0.0)'
+        required: true
+
+permissions:
+  contents: write                    # needed to create the release + upload assets
+
+jobs:
+  release:
+    name: Build universal DMG & release
+    runs-on: macos-14                # Apple-silicon runner with full Xcode
+    env:
+      # secrets can't be used in `if:` directly, so surface presence as a plain env value
+      HAS_CERT: ${{ secrets.MACOS_CERT_P12 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0             # full history so the build number can be derived
+
+      - name: Show toolchain
+        run: swiftc --version && xcrun --show-sdk-path
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.version }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          case "$TAG" in
+            v[0-9]*) ;;
+            *) echo "::error::Tag '$TAG' is not semver (expected vX.Y.Z)"; exit 1 ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tag exists (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        run: git tag -f "${{ steps.ver.outputs.tag }}"
+
+      - name: Logic self-check
+        run: bash scripts/run-selfcheck.sh
+
+      # --- OPTIONAL signing: only runs if you add these repo secrets ---
+      # MACOS_CERT_P12        base64 of your "Developer ID Application" .p12
+      # MACOS_CERT_PASSWORD   password for that .p12
+      # MACOS_DEVELOPER_ID    e.g. "Developer ID Application: Your Name (TEAMID)"
+      # AC_APPLE_ID / AC_TEAM_ID / AC_PASSWORD   for notarization (app-specific pw)
+      - name: Import signing certificate
+        if: ${{ env.HAS_CERT == 'true' }}
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          echo "$MACOS_CERT_P12" | base64 --decode > /tmp/cert.p12
+          security create-keychain -p ci build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security unlock-keychain -p ci build.keychain
+          security import /tmp/cert.p12 -k build.keychain -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -d user -s build.keychain login.keychain
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ci build.keychain >/dev/null
+          rm -f /tmp/cert.p12
+
+      - name: Build universal DMG
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          DEVELOPER_ID: ${{ secrets.MACOS_DEVELOPER_ID }}
+          AC_APPLE_ID: ${{ secrets.AC_APPLE_ID }}
+          AC_TEAM_ID: ${{ secrets.AC_TEAM_ID }}
+          AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
+        run: bash scripts/build-dmg.sh
+
+      - name: Verify universal binary (arm64 + x86_64)
+        run: lipo -info "build/JobHunter.app/Contents/MacOS/JobHunter"
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: JobHunter ${{ steps.ver.outputs.tag }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: dist/*.dmg
