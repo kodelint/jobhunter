@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 
+@MainActor
 struct MenuBarView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.openWindow) private var openWindow

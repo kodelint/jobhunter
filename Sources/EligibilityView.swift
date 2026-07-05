@@ -1,5 +1,6 @@
 import SwiftUI
 
+@MainActor
 struct EligibilityView: View {
     @Environment(AppStore.self) private var store
 

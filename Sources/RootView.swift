@@ -4,6 +4,7 @@ enum SidebarItem: Hashable {
     case dashboard, jobs(JobTab), sources, resume, eligibility, inbox, ai
 }
 
+@MainActor
 struct RootView: View {
     @Environment(AppStore.self) private var store
     @State private var selection: SidebarItem = .dashboard

@@ -1,5 +1,6 @@
 import SwiftUI
 
+@MainActor
 struct DashboardView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.openURL) private var openURL

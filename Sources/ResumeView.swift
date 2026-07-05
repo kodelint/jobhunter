@@ -3,6 +3,7 @@ import AppKit
 import PDFKit
 import UniformTypeIdentifiers
 
+@MainActor
 struct ResumeView: View {
     @Environment(AppStore.self) private var store
     @State private var analyzing = false

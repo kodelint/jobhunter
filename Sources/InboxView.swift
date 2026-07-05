@@ -1,5 +1,6 @@
 import SwiftUI
 
+@MainActor
 struct InboxView: View {
     @Environment(AppStore.self) private var store
     @State private var appPassword = ""

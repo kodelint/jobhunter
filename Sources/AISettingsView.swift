@@ -1,5 +1,6 @@
 import SwiftUI
 
+@MainActor
 struct AISettingsView: View {
     @Environment(AppStore.self) private var store
     @State private var apiKey = ""

@@ -1,5 +1,6 @@
 import SwiftUI
 
+@MainActor
 struct JobsView: View {
     let tab: JobTab
     @Environment(AppStore.self) private var store
@@ -140,6 +141,7 @@ struct JobsView: View {
 
 // MARK: - Job card (list row)
 
+@MainActor
 struct JobCard: View {
     let job: Job
     let selected: Bool
@@ -196,6 +198,7 @@ struct JobCard: View {
 
 // MARK: - Job detail
 
+@MainActor
 struct JobDetail: View {
     let job: Job
     @Environment(AppStore.self) private var store
@@ -420,6 +423,7 @@ struct JobDetail: View {
 
 // MARK: - Add applied job (manual entry for applications made outside the scanned sources)
 
+@MainActor
 struct AddManualJobSheet: View {
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss
@@ -469,6 +473,7 @@ struct AddManualJobSheet: View {
 
 // MARK: - Wrong match (fundamentally off-profile; captures a reason that teaches future AI scoring)
 
+@MainActor
 struct WrongMatchSheet: View {
     let job: Job
     @Environment(AppStore.self) private var store

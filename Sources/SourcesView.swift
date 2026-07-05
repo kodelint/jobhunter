@@ -1,5 +1,6 @@
 import SwiftUI
 
+@MainActor
 struct SourcesView: View {
     @Environment(AppStore.self) private var store
     @State private var showAdd = false
@@ -125,6 +126,7 @@ struct SourcesView: View {
 
 // MARK: - Company row
 
+@MainActor
 struct CompanyRow: View {
     let company: Company
     let color: Color
@@ -164,6 +166,7 @@ struct CompanyRow: View {
 
 // MARK: - Add company
 
+@MainActor
 struct AddCompanySheet: View {
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss

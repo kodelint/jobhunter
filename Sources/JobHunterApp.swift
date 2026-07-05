@@ -1,6 +1,7 @@
 import SwiftUI
 
 @main
+@MainActor
 struct JobHunterApp: App {
     @State private var store = AppStore()
 
