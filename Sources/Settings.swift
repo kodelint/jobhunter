@@ -43,8 +43,9 @@ final class Settings {
     init() {
         loading = true
         appearance = Settings.decode("appearance") ?? .system
-        provider = Settings.decode("provider") ?? .claude
-        model = d.string(forKey: "model") ?? AIProvider.claude.defaultModel
+        let p: AIProvider = Settings.decode("provider") ?? .claude
+        provider = p
+        model = d.string(forKey: "model") ?? ""
         baseURL = d.string(forKey: "baseURL") ?? ""
         useAI = d.object(forKey: "useAI") as? Bool ?? true
         topN = d.object(forKey: "topN") as? Int ?? 40
@@ -63,7 +64,7 @@ final class Settings {
 
     func selectProvider(_ p: AIProvider) {
         provider = p
-        model = p.defaultModel
+        model = ""
         baseURL = p.defaultBaseURL
     }
 

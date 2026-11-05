@@ -29,6 +29,8 @@ final class AppStore {
     // Resolved off the main thread by refreshAIState() (launch / provider change / key save).
     var aiReady = false
     var aiKeySource = "none"   // "keychain" | "env" | "none"
+    var availableModels: [String] = []
+    var loadingModels = false
 
     // Below this effective score, a relevant role goes to the "Low matches" tab, not New/All.
     static let lowFit = 55
@@ -206,7 +208,14 @@ final class AppStore {
 
     // MARK: company actions
     func addCompany(name: String, ats: ATSKind, token: String, tier: Tier) {
-        db.upsertCompany(name: name, ats: ats, token: token, tier: tier); companies = db.allCompanies()
+        db.upsertCompany(name: name, ats: ats, token: token, tier: tier)
+        companies = db.allCompanies()
+        toast = "Added \(name) (\(ats.label))."
+    }
+    func updateCompany(id: Int64, name: String, ats: ATSKind, token: String, tier: Tier) {
+        db.updateCompany(id: id, name: name, ats: ats, token: token, tier: tier)
+        companies = db.allCompanies()
+        toast = "Updated \(name) (\(ats.label))."
     }
     func toggleCompany(_ c: Company) { db.setCompanyEnabled(c.id, !c.enabled); companies = db.allCompanies() }
     func deleteCompany(_ c: Company) { db.deleteCompany(c.id); companies = db.allCompanies() }
@@ -218,6 +227,7 @@ final class AppStore {
     }
     func analyzeResume() async {
         guard !resumeText.isEmpty else { toast = "Import a resume first."; return }
+        if availableModels.isEmpty { await refreshModels() }
         guard let cfg = aiConfig() else { toast = "Add an API key in AI settings first."; return }
         do {
             profile = try await AIService.analyzeResume(resumeText, cfg: cfg)
@@ -241,24 +251,35 @@ final class AppStore {
         let p = settings.provider
         let key = resolvedKey(p)
         if p.needsKey && key.isEmpty { return nil }
+        if settings.model.isEmpty { return nil }
         return AIConfig(provider: p, model: settings.model, apiKey: key, baseURL: settings.baseURL)
     }
 
-    /// Resolve the current provider's key OFF the render path and cache readiness, so SwiftUI
-    /// `body` reads `aiReady`/`aiKeySource` instead of touching the Keychain or spawning a shell.
-    /// Call at launch, on provider change, and after a key is saved or removed.
-    func refreshAIState() {
+    func refreshModels() async {
         let p = settings.provider
-        Task.detached {
-            let src: String
-            if let k = Keychain.get(p.keychainAccount), !k.isEmpty { src = "keychain" }
-            else if EnvKeys.hasValue(for: p) { src = "env" }
-            else { src = "none" }
-            await MainActor.run {
-                self.aiKeySource = src
-                self.aiReady = !p.needsKey || src != "none"
-            }
+        let base = settings.baseURL
+        loadingModels = true
+        let resolved: (key: String, src: String) = await Task.detached {
+            if let k = Keychain.get(p.keychainAccount), !k.isEmpty { return (k, "keychain") }
+            if let e = EnvKeys.value(for: p), !e.isEmpty { return (e, "env") }
+            return ("", "none")
+        }.value
+        guard settings.provider == p else { return }
+        aiKeySource = resolved.src
+        aiReady = !p.needsKey || resolved.src != "none"
+        let fetched = await AIService.fetchModels(provider: p, apiKey: resolved.key, baseURL: base)
+        guard settings.provider == p else { return }
+        availableModels = fetched
+        loadingModels = false
+        if !fetched.isEmpty && !fetched.contains(settings.model) {
+            settings.model = fetched[0]
         }
+    }
+
+    /// Resolve the current provider's key OFF the render path and fetch available models from the API.
+    func refreshAIState() {
+        availableModels = []
+        Task { await refreshModels() }
     }
 
     // MARK: pipeline metrics (all read from cached stats -> O(1) in the render path)
@@ -447,6 +468,9 @@ final class AppStore {
         // AI evaluation of the shortlist
         var aiScored = 0
         let canUseResume = !profile.summary.isEmpty || !resumeText.isEmpty
+        if settings.useAI, canUseResume {
+            if availableModels.isEmpty { await refreshModels() }
+        }
         if settings.useAI, canUseResume, let cfg = aiConfig() {
             let shortlist = Array(jobs.filter { $0.status == .active && $0.aiScore == nil && passesRelevance($0) }
                 .sorted { $0.keywordScore > $1.keywordScore }.prefix(settings.topN))
@@ -457,18 +481,29 @@ final class AppStore {
             // AI phase runs ~Nx faster without hammering provider rate limits (per-call retry lives in
             // AIService.post). ponytail: fixed cap; expose as a setting if a provider's limits bite.
             let maxInFlight = 4
-            await withTaskGroup(of: (String, AIEvaluation?).self) { group in
+            await withTaskGroup(of: (String, Result<AIEvaluation, Error>).self) { group in
                 var it = shortlist.makeIterator()
                 func addNext() {
                     guard let j = it.next() else { return }
                     group.addTask {
-                        (j.id, try? await AIService.evaluate(job: j, profile: prof, resume: resume, feedback: feedback, cfg: cfg))
+                        do {
+                            let eval = try await AIService.evaluate(job: j, profile: prof, resume: resume, feedback: feedback, cfg: cfg)
+                            return (j.id, .success(eval))
+                        } catch {
+                            return (j.id, .failure(error))
+                        }
                     }
                 }
                 for _ in 0..<maxInFlight { addNext() }
-                for await (id, eval) in group {
-                    if let eval { db.setAI(id, eval) }
-                    else if toast == nil { toast = "Some AI evaluations failed (rate limit or network)." }
+                for await (id, result) in group {
+                    switch result {
+                    case .success(let eval):
+                        db.setAI(id, eval)
+                        aiScored += 1
+                    case .failure(let err):
+                        NSLog("AI evaluation failed for %@: %@", id, err.localizedDescription)
+                        if toast == nil { toast = "Some AI evaluations failed (\(err.localizedDescription))." }
+                    }
                     scan.done += 1
                     scan.fraction = 0.5 + Double(scan.done) / Double(max(shortlist.count, 1)) * 0.5
                     addNext()
@@ -476,7 +511,6 @@ final class AppStore {
             }
             jobs = db.allJobs()
             refreshStats()
-            aiScored = shortlist.count
             // (score-based cap applied below, after AI scores land)
         } else if settings.useAI && !canUseResume {
             toast = "Add your resume to enable AI fit scoring — showing keyword matches for now."

@@ -13,15 +13,6 @@ enum AIProvider: String, CaseIterable, Identifiable, Codable {
     }
     var keychainAccount: String { "apikey.\(rawValue)" }
     var needsKey: Bool { self != .local }
-    var models: [String] {
-        switch self {
-        case .claude: return ["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001"]
-        case .gpt: return ["gpt-5", "gpt-5-mini", "gpt-4.1"]
-        case .gemini: return ["gemini-2.5-pro", "gemini-2.5-flash"]
-        case .local: return ["llama3.1", "qwen2.5", "mistral"]
-        }
-    }
-    var defaultModel: String { models.first ?? "" }
     var defaultBaseURL: String { self == .local ? "http://localhost:11434" : "" }
 }
 
@@ -36,6 +27,53 @@ struct AIError: LocalizedError { let msg: String; var errorDescription: String? 
 
 enum AIService {
     // MARK: public API
+
+    static func fetchModels(provider: AIProvider, apiKey: String, baseURL: String = "") async -> [String] {
+        if provider.needsKey && apiKey.isEmpty { return [] }
+        do {
+            switch provider {
+            case .claude:
+                let json = try await get("https://api.anthropic.com/v1/models",
+                    headers: ["x-api-key": apiKey, "anthropic-version": "2023-06-01"])
+                guard let d = json as? [String: Any], let data = d["data"] as? [[String: Any]] else { return [] }
+                return data.compactMap { $0["id"] as? String }
+            case .gpt:
+                let json = try await get("https://api.openai.com/v1/models",
+                    headers: ["Authorization": "Bearer \(apiKey)"])
+                guard let d = json as? [String: Any], let data = d["data"] as? [[String: Any]] else { return [] }
+                let skip = ["embedding", "whisper", "tts", "dall-e", "image", "audio", "realtime", "transcribe", "moderation", "sora", "babbage", "davinci"]
+                return data
+                    .sorted { ($0["created"] as? Int ?? 0) > ($1["created"] as? Int ?? 0) }
+                    .compactMap { $0["id"] as? String }
+                    .filter { id in !skip.contains(where: { id.lowercased().contains($0) }) }
+            case .gemini:
+                let json = try await get("https://generativelanguage.googleapis.com/v1beta/models",
+                    headers: ["x-goog-api-key": apiKey])
+                guard let d = json as? [String: Any], let models = d["models"] as? [[String: Any]] else { return [] }
+                return models.reversed().compactMap { m -> String? in
+                    guard let methods = m["supportedGenerationMethods"] as? [String],
+                          methods.contains("generateContent"),
+                          let name = m["name"] as? String else { return nil }
+                    return name.hasPrefix("models/") ? String(name.dropFirst(7)) : name
+                }
+            case .local:
+                let base = baseURL.isEmpty ? "http://localhost:11434" : baseURL
+                if let json = try? await get("\(base)/v1/models", headers: [:]),
+                   let d = json as? [String: Any], let data = d["data"] as? [[String: Any]] {
+                    let ids = data.compactMap { $0["id"] as? String }
+                    if !ids.isEmpty { return ids }
+                }
+                if let json = try? await get("\(base)/api/tags", headers: [:]),
+                   let d = json as? [String: Any], let models = d["models"] as? [[String: Any]] {
+                    return models.compactMap { $0["name"] as? String }
+                }
+                return []
+            }
+        } catch {
+            NSLog("Failed to fetch models for %@: %@", provider.rawValue, error.localizedDescription)
+            return []
+        }
+    }
 
     static func testConnection(_ cfg: AIConfig) async -> Result<String, Error> {
         do {
@@ -120,6 +158,19 @@ enum AIService {
         }
     }
 
+    private static func get(_ url: String, headers: [String: String]) async throws -> Any {
+        guard let u = URL(string: url) else { throw AIError(msg: "Bad URL") }
+        var req = URLRequest(url: u, timeoutInterval: 15)
+        req.httpMethod = "GET"
+        for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        if let http = resp as? HTTPURLResponse, http.statusCode >= 400 {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw AIError(msg: "HTTP \(http.statusCode): \(String(msg.prefix(200)))")
+        }
+        return try JSONSerialization.jsonObject(with: data)
+    }
+
     private static func post(_ url: String, headers: [String: String], body: [String: Any]) async throws -> Any {
         guard let u = URL(string: url) else { throw AIError(msg: "Bad URL") }
         let payload = try JSONSerialization.data(withJSONObject: body)
@@ -165,8 +216,9 @@ enum AIService {
     private static func openAICompatible(_ cfg: AIConfig, base: String, system: String, user: String, maxTokens: Int) async throws -> String {
         var headers = ["Content-Type": "application/json"]
         if !cfg.apiKey.isEmpty { headers["Authorization"] = "Bearer \(cfg.apiKey)" }
+        let tokenKey = cfg.provider == .gpt ? "max_completion_tokens" : "max_tokens"
         let json = try await post("\(base)/v1/chat/completions", headers: headers,
-            body: ["model": cfg.model, "max_tokens": maxTokens,
+            body: ["model": cfg.model, tokenKey: maxTokens,
                    "messages": [["role": "system", "content": system], ["role": "user", "content": user]]])
         guard let d = json as? [String: Any], let choices = d["choices"] as? [[String: Any]],
               let msg = choices.first?["message"] as? [String: Any], let txt = msg["content"] as? String

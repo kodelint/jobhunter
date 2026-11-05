@@ -2,7 +2,7 @@
 
 # JobHunter
 
-**A native macOS app that finds roles worth applying to, scores each one against your resume, and tracks every application from _New_ to _Offer_ - all on your Mac. No account, no server, no subscription.**
+**A native macOS app that fetches open roles from 182 company career boards, scores each listing against your resume, and tracks every application from _New_ to _Offer_ on your Mac. No account, no server, no subscription.**
 
 [![Release](https://img.shields.io/github/v/release/kodelint/jobhunter?sort=semver&color=7c6cf0)](https://github.com/kodelint/jobhunter/releases)
 [![Build](https://github.com/kodelint/jobhunter/actions/workflows/release.yml/badge.svg)](https://github.com/kodelint/jobhunter/actions/workflows/release.yml)
@@ -18,23 +18,18 @@
 
 </div>
 
-## Why I built this
+## Overview
 
-I kept losing track of my own job hunt. Openings lived across a dozen career sites, "did I already apply here?" was a spreadsheet I never updated, and recruiter replies got buried in Gmail. Every tool I tried wanted an account, a subscription, and my data.
-
-So I built **JobHunter**: it pulls openings straight from company career APIs, ranks them against my actual resume, and keeps the whole pipeline - applied, interviewing, offer, rejected - in one local app. It reads your resume to learn what _you_ want, so it works whether you're a platform engineer, a nurse manager, a data scientist, or a VP. Your resume, keys, and history stay in a local SQLite file on your machine.
-
-It's the tool I wished existed, so I open-sourced it.
+JobHunter pulls open roles straight from public applicant tracking system (ATS) APIs, ranks them against your resume, and tracks your pipeline (`New -> Applied -> Interviewing -> Offer / Rejected`) in one local macOS application. Your resume, API keys, and application history stay on your Mac in SQLite and the macOS Keychain.
 
 ## Highlights
 
-- **One scan, every board.** Fetches current postings from Greenhouse, Ashby, Lever, and SmartRecruiters in a single pass (50+ companies seeded; add your own by career-board token).
-- **Fit, not keyword soup.** Reads your resume, derives your target titles / seniority / skills, and scores every posting. Optional AI gives a 0-100 fit verdict with concrete reasons and honest gaps.
-- **A real pipeline.** New -> Applied -> Interviewing -> Offer / Rejected, with follow-up reminders and per-role notes.
-- **It learns your taste.** Flag a role as a _wrong match_ and tell it why; future scans score similar off-profile roles lower.
-- **Track anything.** Applied somewhere outside your sources (a Workday portal, a referral)? Add it manually and it lives in the same pipeline.
-- **Optional Gmail sync.** Reads your inbox over IMAP to auto-detect interview / offer / rejection replies and advance the matching application - no OAuth, no Google Cloud project.
-- **100% local.** Nothing is uploaded anywhere except the AI provider you choose, and only if you turn AI on.
+- **182 verified boards built in.** Fetches live postings across Greenhouse (90), Ashby (67), Lever (16), and SmartRecruiters (9) in one scan.
+- **URL paste and live board verification.** Add or edit any company from the **Sources** tab by pasting a career board URL or entering a slug. Click **Verify / Detect** to probe all four ATS platforms and check the live open role count before saving.
+- **Live AI model discovery.** Queries your provider's `/v1/models` endpoint (`api.anthropic.com/v1/models`, `api.openai.com/v1/models`, `generativelanguage.googleapis.com/v1beta/models`, or your local server's `/v1/models` and `/api/tags`) with your API key so every available model appears in the picker automatically.
+- **Two-stage fit scoring.** A fast local keyword pass scores every role against your resume profile, then optional AI evaluation scores the top matches (0-100) with a one-line verdict, match reasons, gaps, and five signal sub-scores.
+- **Wrong-match feedback loop.** Flag a role as a wrong match with a reason, and future AI evaluations score similar off-profile roles lower.
+- **Full application pipeline.** Track sourced and manually added applications through every stage, set follow-up dates, and optionally sync Gmail over IMAP to auto-advance stages from recruiter replies.
 
 ## Screenshots
 
@@ -42,106 +37,74 @@ It's the tool I wished existed, so I open-sourced it.
 | :---: | :---: |
 | ![Dashboard](docs/dashboard.png) | ![Matches](docs/matches.png) |
 
-## How it works
+## How a Scan Works
 
-Each scan runs a small, predictable pipeline:
+1. **Source:** Conditional `GET` requests (`ETag` / `If-Modified-Since`) fetch enabled career boards across Greenhouse, Ashby, Lever, and SmartRecruiters. Unchanged boards return HTTP `304` and skip parsing. Every posting gets a deterministic FNV-1a ID so rescans update existing records in place.
+2. **Score:** An off-main-thread keyword pass ranks each posting against your resume profile (titles, seniority band, skills, location, and eligibility constraints).
+3. **Evaluate (optional):** For the top `N` keyword matches that have not been scored yet, the selected AI model evaluates fit against your resume and returns a 0-100 score, verdict, reasons, gaps, and five sub-scores (`leadership`, `location`, `technical`, `domain`, `compensation`).
+4. **Track:** Roles land in your pipeline tabs (`New`, `All`, `Low`, `Favorites`, `Applied`, `Ignored`, `Wrong matches`).
 
-1. **Source** - conditional-GET fetches (ETag / 304) from every enabled career board, so unchanged boards aren't re-downloaded. Postings get deterministic IDs, so a rescan doesn't re-add everything as "new".
-2. **Score** - a fast, local, off-main-thread keyword pass ranks each posting against your resume profile and drops roles you've flagged.
-3. **Evaluate (optional)** - for the top matches only, an AI model reads the job against your resume and returns a fit score, a one-line verdict, why-you-match reasons, gaps, and five per-signal sub-scores. Runs concurrently and reuses cached scores across scans.
-4. **Track** - results land in your pipeline. Apply, snooze, add notes, set follow-ups, mark wrong matches.
+## Features
 
-With no resume analyzed yet, JobHunter falls back to a sensible built-in profile so it's useful on first launch.
+### Sourcing & Board Management
+- **Built-in catalog:** 182 live-verified engineering and AI company boards across **Greenhouse** (90), **Ashby** (67), **Lever** (16), and **SmartRecruiters** (9).
+- **Add or edit sources in app:** Paste any Greenhouse, Ashby, Lever, or SmartRecruiters board URL to auto-fill the ATS and token, or enter a company token and click **Verify / Detect** to auto-detect the ATS and preview the open job count.
+- **Conditional caching:** Stores `ETag` and `Last-Modified` headers per board in SQLite to avoid redundant downloads.
+- **SmartRecruiters detail backfill:** Paginates listings and fetches full job descriptions only for newly discovered postings (capped per scan).
 
-## Features in detail
+### Resume Matching & Live AI Evaluation
+- **Resume extraction:** Parses your resume into target titles, seniority level, atomic skills, and country.
+- **Dynamic model catalog:** Fetches available models directly from Anthropic (`/v1/models`), OpenAI (`/v1/models`), Google Gemini (`/v1beta/models`), or a local Ollama / OpenAI-compatible server (`/v1/models` and `/api/tags`).
+- **Cached AI scores:** Evaluates only the top `N` unscored roles per scan and reuses cached scores on future scans.
+- **Wrong-match training:** Marking a role as a wrong match records your reason and passes it into future AI prompts as a negative signal.
 
-### Sourcing
-- Live fetch across **Greenhouse, Ashby, Lever, and SmartRecruiters**.
-- Conditional GET with ETag / If-Modified-Since so unchanged boards return `304` and cost nothing.
-- SmartRecruiters pagination with description backfill for _new_ postings only (bounded per scan).
-- Deterministic FNV-1a IDs, so rescans update in place instead of flooding "New".
-- Add companies by their career-board token; enable/disable any source.
+### Eligibility & Constraints
+- Extracts work authorization, compensation range, remote/hybrid/onsite policy, required years of experience, IC vs. management track, travel percentage, and security clearance from each posting.
+- Filters roles against your configured work authorization status, minimum compensation floor, work style preferences, and country.
 
-### Matching & scoring
-- **Resume analysis** extracts your target titles, seniority band, atomic skills, and country.
-- **Local keyword scorer** weighs function + skill relevance, with a level-band filter (target seniority and up, unless you opt in to see below).
-- **Optional AI evaluation** via **Claude, GPT, Gemini, or a local model** (Ollama-compatible) - a 0-100 score, verdict, reasons, gaps, and per-signal sub-scores (leadership, location, technical, domain, compensation).
-- **Location filter** with country + state matching and an include-anywhere-remote toggle.
-- Only the top matches are sent to AI (configurable), and already-scored roles are never re-sent - so scans stay cheap.
+### Pipeline & Gmail Sync
+- **Manual role entry:** Log applications submitted outside your configured boards (for example Workday or referrals) in the same pipeline.
+- **Optional Gmail IMAP sync:** Connects over IMAP using a Gmail App Password stored in a `0600` netrc file, classifies recruiter replies into interview, offer, or rejection, and updates the matching application stage.
 
-### Wrong-match feedback (it learns)
-- Mark a role as a **wrong match** (wrong function, domain, seniority, or location) and give a reason.
-- The reason is stored and injected into future AI evaluations as a negative signal, so similar off-profile roles score lower.
-- Distinct from **Ignore**, which is a silent personal "not interested" that never trains the AI.
-
-### Application tracking
-- Tabs for **New / All / Low / Favorites / Applied / Ignored / Wrong matches**.
-- Pipeline stages, follow-up dates with reminders, per-role notes, and favorites.
-- **Manual entry** for applications made outside your sources (Workday, referrals, LinkedIn) - tracked in the same pipeline, and picked up by Gmail sync automatically.
-
-### Eligibility & constraints
-- Parses each posting for **work authorization, comp range, remote/hybrid/onsite, years of experience, IC vs. management, travel, and clearance**.
-- Set your own eligibility (status, comp floor, work styles, country) and optionally hide anything you're not eligible for.
-
-### Gmail inbox sync (optional)
-- Connects over IMAP with a Gmail **app password** (needs 2-Step Verification + IMAP enabled). No OAuth, no cloud project.
-- Classifies recent replies into interview / offer / rejection and advances the matching application's stage.
-- Credentials go in a `0600` netrc file, never on the process argv.
-
-### Dashboard
-- Warm, time-aware greeting and a **top-pick spotlight** with the AI's why-you-match / gaps.
-- KPI row, per-signal **fit breakdown**, an application **pipeline** with response rate, a **new-matches-per-week** chart, response timeline, follow-ups, and a market comp band inferred from your matches.
-- Modules that have no data (or need a connection you haven't made, like Gmail-gated interviews) simply don't render - no empty frames.
-
-### Privacy & security
-- Resume, application history, and cache live in a local SQLite database (`~/Library/Application Support/JobHunter`).
-- API keys are stored in the macOS **Keychain** (or read from your shell environment).
-- The only outbound calls are to the AI provider you pick (when AI is on) and to the public career-board APIs.
+### Privacy & Storage
+- All application state, jobs, resume data, and HTTP cache headers live in `~/Library/Application Support/JobHunter/jobhunter.sqlite`.
+- API keys are stored in the macOS **Keychain** or read from environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` / `GOOGLE_API_KEY`).
+- Outbound network requests go only to the enabled public ATS board APIs, your selected AI provider (when enabled), and Gmail IMAP (when configured).
 
 ## Install
 
-Download the latest `JobHunter-vX.Y.Z.dmg` from [**Releases**](https://github.com/kodelint/jobhunter/releases), open it, and drag JobHunter to Applications.
+Download the latest `JobHunter-vX.Y.Z.dmg` from [**Releases**](https://github.com/kodelint/jobhunter/releases), open it, and drag `JobHunter.app` to `/Applications`.
 
-The build is ad-hoc signed (not notarized), so the first launch needs a **right-click -> Open** (or _System Settings -> Privacy & Security -> Open Anyway_).
+Ad-hoc signed builds require **right-click -> Open** (or _System Settings -> Privacy & Security -> Open Anyway_) on first launch.
 
-**Requirements:** macOS 14 (Sonoma) or later. Universal binary (Apple Silicon + Intel).
+**Requirements:** macOS 14 (Sonoma) or later. Universal binary (`arm64` + `x86_64`).
 
-## Build from source
+## Build from Source
 
-No package manager, no Xcode project - just `swiftc`.
+JobHunter compiles directly with `swiftc` and links only system frameworks (`SwiftUI`, `AppKit`, `Security`, `sqlite3`).
 
 ```bash
 git clone https://github.com/kodelint/jobhunter.git
 cd jobhunter
-./scripts/build-dmg.sh          # builds a universal .app + DMG into dist/
-open build/JobHunter.app        # run it
+./scripts/build-dmg.sh
+cp -R build/JobHunter.app /Applications/JobHunter.app
+open -a /Applications/JobHunter.app
 ```
 
-Handy scripts:
-
-| Script | What it does |
+| Script | Purpose |
 | --- | --- |
-| `scripts/build-dmg.sh` | Compile the universal binary, bundle, sign, and package a DMG. |
-| `scripts/compile-check.sh` | Fast type-check of the whole app (arm64). |
-| `scripts/run-selfcheck.sh` | Run the pure-logic self-checks (`selfcheck OK`). |
+| `scripts/build-dmg.sh` | Compile universal binary (`arm64` + `x86_64`), inject git tag version (`CFBundleShortVersionString`) and commit count (`CFBundleVersion`) into `Info.plist`, sign, and package `dist/JobHunter-vX.Y.Z.dmg`. |
+| `scripts/compile-check.sh` | Fast `arm64` type-check of `Sources/*.swift`. |
+| `scripts/run-selfcheck.sh` | Compile and run deterministic self-checks (`selfcheck OK`). |
 
-Set `DEVELOPER_ID` (and notary credentials) before `build-dmg.sh` to produce a signed, notarizable build.
+Set `DEVELOPER_ID` (and optional `NOTARY_PROFILE` or `AC_APPLE_ID` / `AC_TEAM_ID` / `AC_PASSWORD`) before running `scripts/build-dmg.sh` to produce a Developer ID signed and notarized DMG.
 
-## Tech
+## Releases & Versioning
 
-- **SwiftUI** UI, compiled directly with `swiftc` (no Xcode project, no SwiftPM manifest).
-- **SQLite3** via the system library for storage - zero third-party dependencies.
-- Concurrency: a `@MainActor` database with CPU/network work on detached tasks handing back `Sendable` values.
-
-## Releases & CI
-
-- Pushing a `vX.Y.Z` tag builds a universal DMG and publishes a GitHub Release with autogenerated notes (see `.github/workflows/release.yml`).
-- Every push / PR to `main` runs a type-check and the logic self-checks (`.github/workflows/ci.yml`).
-- Versioning follows [Semantic Versioning](https://semver.org).
-
-## Contributing
-
-Issues and PRs welcome. Commits follow [Conventional Commits](https://www.conventionalcommits.org) (`feat:`, `fix:`, `docs:`, `ci:`, ...). Run `scripts/compile-check.sh` and `scripts/run-selfcheck.sh` before opening a PR.
+- App version (`CFBundleShortVersionString`) comes from the latest `vX.Y.Z` git tag (or the `VERSION` environment variable), and build number (`CFBundleVersion`) comes from `git rev-list --count HEAD`.
+- The active version and build number appear in the sidebar header, menu bar popover, and **AI & Settings -> About** panel.
+- Pushing a `vX.Y.Z` tag triggers `.github/workflows/release.yml`, which runs `scripts/run-selfcheck.sh`, builds the universal DMG, and publishes a GitHub Release.
+- Pushing or opening a pull request to `main` triggers `.github/workflows/ci.yml`.
 
 ## License
 

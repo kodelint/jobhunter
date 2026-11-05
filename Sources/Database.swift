@@ -164,6 +164,16 @@ final class Database {
         sqlite3_finalize(stmt)
     }
 
+    func updateCompany(id: Int64, name: String, ats: ATSKind, token: String, tier: Tier) {
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, "UPDATE companies SET name=?,ats=?,token=?,tier=? WHERE id=?", -1, &stmt, nil) == SQLITE_OK {
+            bind(stmt, 1, name); bind(stmt, 2, ats.rawValue); bind(stmt, 3, token)
+            bind(stmt, 4, tier.rawValue); sqlite3_bind_int64(stmt, 5, id)
+            sqlite3_step(stmt)
+        }
+        sqlite3_finalize(stmt)
+    }
+
     func deleteCompany(_ id: Int64) {
         var stmt: OpaquePointer?
         if sqlite3_prepare_v2(db, "DELETE FROM companies WHERE id=?", -1, &stmt, nil) == SQLITE_OK {

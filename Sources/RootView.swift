@@ -1,5 +1,27 @@
 import SwiftUI
 
+enum AppVersion {
+    static var short: String {
+        if let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+           !v.isEmpty, v != "__VERSION__" {
+            return v
+        }
+        return "1.1.0"
+    }
+
+    static var build: String {
+        if let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+           !b.isEmpty, b != "__BUILD__" {
+            return b
+        }
+        return "1"
+    }
+
+    static var sidebarLabel: String {
+        "v\(short) · build \(build)"
+    }
+}
+
 enum SidebarItem: Hashable {
     case dashboard, jobs(JobTab), sources, resume, eligibility, inbox, ai
 }
@@ -62,7 +84,7 @@ struct RootView: View {
             }
             VStack(alignment: .leading, spacing: 0) {
                 Text("JobHunter").font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
-                Text("v2 · native").font(.system(size: 10.5, weight: .medium)).foregroundStyle(.white.opacity(0.5))
+                Text(AppVersion.sidebarLabel).font(.system(size: 10.5, weight: .medium)).foregroundStyle(.white.opacity(0.5))
             }
             Spacer()
         }

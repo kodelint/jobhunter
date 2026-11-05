@@ -10,6 +10,7 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Label("JobHunter", systemImage: "target").font(.headline)
+                Text("v\(AppVersion.short)").font(.caption2).foregroundStyle(.secondary)
                 Spacer()
                 if store.scan.running { ProgressView().controlSize(.small) }
             }

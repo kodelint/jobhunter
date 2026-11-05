@@ -22,14 +22,22 @@ struct AISettingsView: View {
                 .pickerStyle(.segmented).labelsHidden().padding(.vertical, 4)
 
                 SettingRow("Model") {
-                    Picker("", selection: $settings.model) {
-                        ForEach(settings.provider.models, id: \.self) { Text($0).tag($0) }
-                    }.labelsHidden().frame(width: 230)
+                    if store.loadingModels && store.availableModels.isEmpty {
+                        ProgressView().controlSize(.small).frame(width: 230, alignment: .trailing)
+                    } else if store.availableModels.isEmpty {
+                        Text(settings.provider.needsKey ? "Add API key to load models" : "No models found")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Picker("", selection: $settings.model) {
+                            ForEach(store.availableModels, id: \.self) { Text($0).tag($0) }
+                        }.labelsHidden().frame(width: 230)
+                    }
                 }
 
                 if settings.provider == .local {
                     TextField("Base URL", text: $settings.baseURL, prompt: Text("http://localhost:11434"))
                         .textFieldStyle(.roundedBorder).font(.system(.body, design: .monospaced))
+                        .onSubmit { store.refreshAIState() }
                 }
 
                 if settings.provider.needsKey {
@@ -101,8 +109,26 @@ struct AISettingsView: View {
             // MARK: right - live status + cost
             statusPanel(settings: settings)
             costPanel(settings: settings)
+            aboutPanel
         }
         .onAppear { loadKey() }
+    }
+
+    private var aboutPanel: some View {
+        PanelCard("About", icon: "info.circle") {
+            HStack {
+                Text("Version").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text("v\(AppVersion.short) (build \(AppVersion.build))")
+                    .font(.system(.caption, design: .monospaced))
+            }
+            HStack {
+                Text("Seeded boards").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text("\(SeedData.companies.count)")
+                    .font(.system(.caption, design: .monospaced))
+            }
+        }
     }
 
     // MARK: right panels

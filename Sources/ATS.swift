@@ -244,4 +244,84 @@ enum ATS {
         s = s.replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)  // cap blank runs
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    // MARK: URL parsing + live token probe for manual source dialog
+
+    static func parseBoardURL(_ raw: String) -> (ats: ATSKind, token: String)? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed.contains("://") ? trimmed : "https://\(trimmed)"),
+              let host = url.host?.lowercased() else { return nil }
+        let parts = url.pathComponents.filter { $0 != "/" && !$0.isEmpty }
+        if host.contains("greenhouse.io") {
+            if let i = parts.firstIndex(of: "boards"), i + 1 < parts.count {
+                return (.greenhouse, parts[i + 1])
+            }
+            if let first = parts.first, first != "embed" { return (.greenhouse, first) }
+        } else if host.contains("ashbyhq.com") {
+            if let i = parts.firstIndex(of: "job-board"), i + 1 < parts.count {
+                return (.ashby, parts[i + 1])
+            }
+            if let first = parts.first { return (.ashby, first) }
+        } else if host.contains("lever.co") {
+            if let i = parts.firstIndex(of: "postings"), i + 1 < parts.count {
+                return (.lever, parts[i + 1])
+            }
+            if let first = parts.first { return (.lever, first) }
+        } else if host.contains("smartrecruiters.com") {
+            if let i = parts.firstIndex(of: "companies"), i + 1 < parts.count {
+                return (.smartrecruiters, parts[i + 1])
+            }
+            if let first = parts.first { return (.smartrecruiters, first) }
+        }
+        return nil
+    }
+
+    static func probeCount(ats: ATSKind, token: String) async throws -> Int {
+        let slug = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !slug.isEmpty else { throw ATSError(message: "empty token") }
+        let url: String
+        switch ats {
+        case .greenhouse: url = "https://boards-api.greenhouse.io/v1/boards/\(slug)/jobs"
+        case .ashby: url = "https://api.ashbyhq.com/posting-api/job-board/\(slug)"
+        case .lever: url = "https://api.lever.co/v0/postings/\(slug)?mode=json"
+        case .smartrecruiters: url = "https://api.smartrecruiters.com/v1/companies/\(slug)/postings?limit=1"
+        case .manual: throw ATSError(message: "unsupported ATS")
+        }
+        guard let json = try await getJSON(url) else { throw ATSError(message: "empty response") }
+        switch ats {
+        case .greenhouse, .ashby:
+            guard let dict = json as? [String: Any], let jobs = dict["jobs"] as? [[String: Any]] else {
+                throw ATSError(message: "invalid board response")
+            }
+            return jobs.count
+        case .lever:
+            guard let jobs = json as? [[String: Any]] else { throw ATSError(message: "invalid board response") }
+            return jobs.count
+        case .smartrecruiters:
+            guard let dict = json as? [String: Any], let total = dict["totalFound"] as? Int else {
+                throw ATSError(message: "invalid board response")
+            }
+            return total
+        case .manual:
+            return 0
+        }
+    }
+
+    static func detectATS(token: String) async -> (ats: ATSKind, count: Int)? {
+        let slug = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !slug.isEmpty else { return nil }
+        return await withTaskGroup(of: (ATSKind, Int)?.self) { group in
+            for kind in ATSKind.sources {
+                group.addTask {
+                    if let c = try? await probeCount(ats: kind, token: slug), c > 0 { return (kind, c) }
+                    return nil
+                }
+            }
+            var best: (ats: ATSKind, count: Int)? = nil
+            for await hit in group {
+                if let hit, best == nil || hit.1 > best!.count { best = (hit.0, hit.1) }
+            }
+            return best
+        }
+    }
 }
